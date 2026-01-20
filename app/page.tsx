@@ -48,7 +48,9 @@ function parseCandidateProtocol(candidate: string) {
 async function logIceStats(pc: RTCPeerConnection, label: string) {
   try {
     const stats = await pc.getStats();
-    const candidates = new Map<string, RTCIceCandidateStats>();
+    // const candidates = new Map<string, RTCIceCandidateStats>();
+    const pairs: RTCIceCandidatePairStats[] = [];
+    
     const pairs: RTCIceCandidatePairStats[] = [];
 
     stats.forEach((r) => {
