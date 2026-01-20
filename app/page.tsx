@@ -19,76 +19,6 @@ type IcePayload = {
   sdpMLineIndex?: number | null;
 };
 
-// type IceServerSummary = {
-//   urls: string[];
-//   hasUsername: boolean;
-//   hasCredential: boolean;
-//   credentialType?: string;
-// };
-
-// function summarizeIceServers(servers: RTCIceServer[]) {
-//   return servers.map((s) => ({
-//     urls: Array.isArray(s.urls) ? s.urls : [s.urls],
-//     hasUsername: Boolean((s as RTCIceServer).username),
-//     hasCredential: Boolean((s as RTCIceServer).credential),
-//     credentialType: (s as RTCIceServer).credentialType,
-//   }));
-// }
-
-function parseCandidateType(candidate: string) {
-  const match = / typ ([a-z]+)/.exec(candidate);
-  return match?.[1] ?? "unknown";
-}
-
-function parseCandidateProtocol(candidate: string) {
-  const parts = candidate.split(" ");
-  return parts.length > 2 ? parts[2] : "unknown";
-}
-
-async function logIceStats(pc: RTCPeerConnection, label: string) {
-  try {
-    const stats = await pc.getStats();
-    // const candidates = new Map<string, RTCIceCandidateStats>();
-    const pairs: RTCIceCandidatePairStats[] = [];
-    
-    const pairs: RTCIceCandidatePairStats[] = [];
-
-    stats.forEach((r) => {
-      if (r.type === "local-candidate" || r.type === "remote-candidate") {
-        candidates.set(r.id, r as RTCIceCandidateStats);
-      }
-      if (r.type === "candidate-pair") {
-        pairs.push(r as RTCIceCandidatePairStats);
-      }
-    });
-
-    const selected =
-      pairs.find((p) => (p as any).selected) ||
-      pairs.find((p) => (p as any).nominated) ||
-      pairs[0];
-
-    if (!selected) {
-      console.log(`[ICE stats] ${label}`, { pairs: 0 });
-      return;
-    }
-
-    const local = candidates.get(selected.localCandidateId);
-    const remote = candidates.get(selected.remoteCandidateId);
-
-    console.log(`[ICE stats] ${label}`, {
-      pairState: selected.state,
-      nominated: (selected as any).nominated ?? false,
-      selected: (selected as any).selected ?? false,
-      localType: local?.candidateType,
-      localProtocol: local?.protocol,
-      remoteType: remote?.candidateType,
-      remoteProtocol: remote?.protocol,
-    });
-  } catch (err) {
-    console.log("[ICE stats] failed to read stats", err);
-  }
-}
-
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -98,31 +28,20 @@ export default function Home() {
 
   const sdpSentRef = useRef(false);
   const pendingIceRef = useRef<IcePayload[]>([]);
-  const iceCountsRef = useRef<Record<string, number>>({});
-  const iceServerSummaryRef = useRef<IceServerSummary[]>([]);
-
-  const statsTimerRef = useRef<number | null>(null);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [rtc, setRtc] = useState<RTCPeerConnectionState>("new");
   const [ice, setIce] = useState<RTCIceConnectionState>("new");
   const [err, setErr] = useState<string>("");
 
-  const [videoBytes, setVideoBytes] = useState<number>(0);
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("");
   const remoteStreamRef = useRef<MediaStream | null>(null);
 
   function cleanup() {
-    if (statsTimerRef.current) {
-      window.clearInterval(statsTimerRef.current);
-      statsTimerRef.current = null;
-    }
 
     sdpSentRef.current = false;
     pendingIceRef.current = [];
-    iceCountsRef.current = {};
-    iceServerSummaryRef.current = [];
 
     if (pcRef.current) {
       pcRef.current.ontrack = null;
@@ -145,7 +64,6 @@ export default function Home() {
 
     setRtc("new");
     setIce("new");
-    setVideoBytes(0);
   }
 
   useEffect(() => () => cleanup(), []);
@@ -181,96 +99,64 @@ export default function Home() {
       streamIdRef.current = sess.stream_id;
       sessionIdRef.current = sess.session_cookie;
 
-      const iceSummary = summarizeIceServers(sess.ice_servers || []);
-      iceServerSummaryRef.current = iceSummary;
-      console.log("D-ID session", {
-        stream_id: sess.stream_id,
-        hasOffer: !!sess.offer,
-        iceServers: iceSummary,
-      });
-      if (!iceSummary.some((s) => s.hasUsername && s.hasCredential)) {
-        console.warn("No TURN credentials detected in iceServers");
-      }
+const pc = new RTCPeerConnection({
+  iceServers: sess.ice_servers,
+  iceTransportPolicy: "relay", // 🔴 FORȚEAZĂ TURN
+});
+pc.onicecandidateerror = (e) => {
+  console.error("ICE CANDIDATE ERROR", e);
+};
 
-      const pc = new RTCPeerConnection({
-        iceServers: sess.ice_servers,
-        iceTransportPolicy: "relay",
-      });
+pcRef.current = pc;
 
-      pc.onicecandidateerror = (e) => {
-        console.error("ICE candidate error", {
-          errorCode: (e as RTCPeerConnectionIceErrorEvent).errorCode,
-          errorText: (e as RTCPeerConnectionIceErrorEvent).errorText,
-          url: (e as RTCPeerConnectionIceErrorEvent).url,
-        });
-      };
+// 🔴 OBLIGATORIU
+pc.addTransceiver("video", { direction: "recvonly" });
+pc.addTransceiver("audio", { direction: "recvonly" });
 
-      pc.onicegatheringstatechange = () => {
-        console.log("ICE gathering state", pc.iceGatheringState);
-        if (pc.iceGatheringState === "complete") {
-          console.log("ICE candidate counts", iceCountsRef.current);
-        }
-      };
+pc.onconnectionstatechange = () => {
+  setRtc(pc.connectionState);
+  if (pc.connectionState === "failed") {
+    setPhase("failed");
+    setErr("RTC failed (ICE nu a reusit sa conecteze).");
+  }
+};
 
-      pcRef.current = pc;
+pc.oniceconnectionstatechange = () => {
+  setIce(pc.iceConnectionState);
+  if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+    setPhase("failed");
+  }
+};
 
-      pc.addTransceiver("video", { direction: "recvonly" });
-      pc.addTransceiver("audio", { direction: "recvonly" });
+pc.ontrack = (e) => {
+  if (!remoteStreamRef.current) remoteStreamRef.current = new MediaStream();
+  remoteStreamRef.current.addTrack(e.track);
 
-      pc.onconnectionstatechange = () => {
-        setRtc(pc.connectionState);
-        console.log("RTC connection state", pc.connectionState);
-        if (pc.connectionState === "failed") {
-          setPhase("failed");
-          setErr("RTC failed (ICE nu a reusit sa conecteze).");
-          void logIceStats(pc, "connection-failed");
-        }
-      };
+  if (!videoRef.current) return;
+  videoRef.current.srcObject = remoteStreamRef.current;
+  videoRef.current.muted = true;
+  void videoRef.current.play().catch(() => {});
+};
 
-      pc.oniceconnectionstatechange = () => {
-        setIce(pc.iceConnectionState);
-        console.log("ICE connection state", pc.iceConnectionState);
-        if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
-          setPhase("failed");
-          void logIceStats(pc, "ice-failed");
-        }
-      };
 
-      pc.ontrack = (e) => {
-        console.log("Remote track", { kind: e.track.kind, id: e.track.id });
-        if (!remoteStreamRef.current) remoteStreamRef.current = new MediaStream();
-        remoteStreamRef.current.addTrack(e.track);
+pc.onicecandidate = (e) => {
+  const c = e.candidate;
+  if (!c) return; // ✅ nu trimitem end-of-candidates la D-ID
 
-        if (!videoRef.current) return;
-        videoRef.current.srcObject = remoteStreamRef.current;
-        videoRef.current.muted = true;
-        void videoRef.current.play().catch(() => {});
-      };
+  const payload: IcePayload = {
+    candidate: c.candidate,
+    sdpMid: c.sdpMid,
+    sdpMLineIndex: c.sdpMLineIndex,
+  };
 
-      pc.onicecandidate = (e) => {
-        const c = e.candidate;
-        if (!c) return;
+  if (!sdpSentRef.current) pendingIceRef.current.push(payload);
+  else void postIce(payload);
+};
 
-        const candidateType = parseCandidateType(c.candidate);
-        const protocol = parseCandidateProtocol(c.candidate);
-        iceCountsRef.current[candidateType] = (iceCountsRef.current[candidateType] ?? 0) + 1;
-        if (iceCountsRef.current[candidateType] <= 3) {
-          console.log("ICE candidate", { candidateType, protocol, sdpMid: c.sdpMid });
-        }
 
-        const payload: IcePayload = {
-          candidate: c.candidate,
-          sdpMid: c.sdpMid,
-          sdpMLineIndex: c.sdpMLineIndex,
-        };
-
-        if (!sdpSentRef.current) pendingIceRef.current.push(payload);
-        else void postIce(payload);
-      };
-
-      await pc.setRemoteDescription(sess.offer);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+await pc.setRemoteDescription(sess.offer);
+const answer = await pc.createAnswer();
+await pc.setLocalDescription(answer);
 
       console.log("SEND SDP", {
         stream_id: streamIdRef.current,
@@ -309,19 +195,6 @@ await fetch("/api/did/message", {
       // 5) Abia acum dam drumul la ICE catre server
       sdpSentRef.current = true;
       await flushIceQueue();
-
-      // 6) Stats simplu: daca bytes cresc, video chiar curge
-      statsTimerRef.current = window.setInterval(async () => {
-        if (!pcRef.current) return;
-        const stats = await pcRef.current.getStats();
-        let bytes = 0;
-        stats.forEach((r) => {
-          if (r.type === "inbound-rtp" && (r as any).kind === "video") {
-            bytes += Number((r as any).bytesReceived ?? 0);
-          }
-        });
-        setVideoBytes(bytes);
-      }, 1000);
 
       setPhase("connected");
     } catch (e: any) {
@@ -391,9 +264,7 @@ await fetch("/api/did/message", {
           Send
         </button>
 
-        <div style={{ fontSize: 12, color: "#9ca3af" }}>
-          Phase: {phase} | RTC: {rtc} | ICE: {ice} | videoBytes: {videoBytes}
-        </div>
+       
       </div>
 
       {err && <div style={{ marginTop: 12, color: "#f87171" }}>Error: {err}</div>}
