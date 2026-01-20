@@ -19,21 +19,21 @@ type IcePayload = {
   sdpMLineIndex?: number | null;
 };
 
-type IceServerSummary = {
-  urls: string[];
-  hasUsername: boolean;
-  hasCredential: boolean;
-  credentialType?: string;
-};
+// type IceServerSummary = {
+//   urls: string[];
+//   hasUsername: boolean;
+//   hasCredential: boolean;
+//   credentialType?: string;
+// };
 
-function summarizeIceServers(servers: RTCIceServer[]) {
-  return servers.map((s) => ({
-    urls: Array.isArray(s.urls) ? s.urls : [s.urls],
-    hasUsername: Boolean((s as RTCIceServer).username),
-    hasCredential: Boolean((s as RTCIceServer).credential),
-    credentialType: (s as RTCIceServer).credentialType,
-  }));
-}
+// function summarizeIceServers(servers: RTCIceServer[]) {
+//   return servers.map((s) => ({
+//     urls: Array.isArray(s.urls) ? s.urls : [s.urls],
+//     hasUsername: Boolean((s as RTCIceServer).username),
+//     hasCredential: Boolean((s as RTCIceServer).credential),
+//     credentialType: (s as RTCIceServer).credentialType,
+//   }));
+// }
 
 function parseCandidateType(candidate: string) {
   const match = / typ ([a-z]+)/.exec(candidate);
